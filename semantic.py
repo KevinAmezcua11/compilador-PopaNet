@@ -1,6 +1,7 @@
 # semantic.py
 import ipaddress
 import math
+from ir import IREmitter
 
 class VLSMSemanticAnalyzer:
     def __init__(self, blocks):
@@ -81,3 +82,23 @@ class VLSMSemanticAnalyzer:
                 f"Error semántico en '{name}': El espacio total requerido para todas las subredes ({total_block_size} direcciones) excede "
                 f"el tamaño total de la red base '{network}' ({network.num_addresses} direcciones)."
             )
+
+    def generate_ir(self):
+        """
+        Genera código intermedio (IR) para los bloques válidos después del análisis semántico.
+        """
+        emitter = IREmitter()
+        for i, block in enumerate(self.blocks):
+            name = block.get('name', f'block{i+1}')
+            ip = block['ip_address']
+            mask = block['subnet_mask']
+            hosts = block['num_hosts']
+
+            emitter.emit("LOAD_NET", f"{ip}{mask}", None, name)
+            for idx, h in enumerate(hosts):
+                emitter.emit("ALLOC_SUBNET", name, h, f"{name}_sub{idx+1}")
+            emitter.emit("CALC_VLSM", name, None, None)
+            emitter.emit("EXPORT_EXCEL", name, None, None)
+            emitter.emit("END_BLOCK", None, None, name)
+
+        return emitter

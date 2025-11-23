@@ -8,6 +8,7 @@ from semantic import VLSMSemanticAnalyzer
 from vlsm_calc import calculate_vlsm
 from excel_export import export_to_excel
 from utils import TextLineNumbers
+from intermediate_code import IntermediateCodeGenerator
 
 class VLSMApp:
     def __init__(self, root):
@@ -42,6 +43,9 @@ class VLSMApp:
         self.notebook.add(self.frame_input, text="Entrada / Salida")
         self.notebook.add(self.frame_tables, text="Tablas")
         self.notebook.add(self.frame_tree, text="Árbol")
+        self.frame_intermediate = ttk.Frame(self.notebook) ##ABCDEF
+        self.notebook.add(self.frame_intermediate, text="Código Intermedio") ##ABCDEF 
+        self._build_intermediate_area(self.frame_intermediate) ##ABCDEF
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Build UI pieces
@@ -125,6 +129,18 @@ class VLSMApp:
         self.tree_notebook = ttk.Notebook(parent)
         self.tree_notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.tree_tabs = []
+
+    def _build_intermediate_area(self, parent):
+        frame = ttk.LabelFrame(parent, text="Código Intermedio Generado")
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        self.text_intermediate = scrolledtext.ScrolledText(
+            frame, wrap=tk.WORD, width=80, height=25,
+            font=("Consolas", 11), background="#fafdff", foreground="#222"
+        )
+        self.text_intermediate.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.text_intermediate.config(state=tk.DISABLED)
+
 
     # ------------------
     # Error popup (bottom sliding bar, full width)
@@ -304,6 +320,29 @@ class VLSMApp:
 
         self.output_text.config(state=tk.DISABLED)
 
+        # === CÓDIGO INTERMEDIO ===
+        try:
+            generator = IntermediateCodeGenerator(blocks)
+            intermediate_result = generator.generate()
+
+            self.text_intermediate.config(state=tk.NORMAL)
+            self.text_intermediate.delete("1.0", tk.END)
+            self.text_intermediate.insert(tk.END, "=== CÓDIGO INTERMEDIO ===\n")
+
+            if isinstance(intermediate_result, list):
+                for instr in intermediate_result:
+                    self.text_intermediate.insert(tk.END, str(instr) + "\n")
+            else:
+                self.text_intermediate.insert(tk.END, str(intermediate_result))
+
+            self.text_intermediate.config(state=tk.DISABLED)
+
+        except Exception as e:
+            self.text_intermediate.config(state=tk.NORMAL)
+            self.text_intermediate.delete("1.0", tk.END)
+            self.text_intermediate.insert(tk.END, f"Error generando código intermedio:\n{e}")
+            self.text_intermediate.config(state=tk.DISABLED)
+
     # ------------------
     # Tables & helpers
     # ------------------
@@ -316,6 +355,12 @@ class VLSMApp:
             self.tree_notebook.forget(tab)
         self.tree_tabs = []
         self.vlsm_data = None
+
+        if hasattr(self, "text_intermediate"):
+            self.text_intermediate.config(state=tk.NORMAL)
+            self.text_intermediate.delete("1.0", tk.END)
+            self.text_intermediate.config(state=tk.DISABLED)
+
 
     def export_to_excel(self):
         if self.vlsm_data:
