@@ -1,13 +1,15 @@
 from ir import IREmitter
+from optimizer import IROptimizer
 
 class IntermediateCodeGenerator:
     def __init__(self, blocks):
         self.blocks = blocks
         self.emitter = IREmitter()
+        self.optimizer = IROptimizer()
 
     def generate(self):
         """
-        Genera el código intermedio (IR) a partir de los bloques sintácticos.
+        Genera el código intermedio.
         """
         for block in self.blocks:
             name = block.get('name', 'BloqueAnonimo')
@@ -15,21 +17,24 @@ class IntermediateCodeGenerator:
             mask = block.get('subnet_mask')
             hosts = block.get('num_hosts', [])
 
-            # BEGIN_BLOCK solo necesita el nombre
+            # BEGIN_BLOCK
             self.emitter.emit("BEGIN_BLOCK", name, None, None)
 
-            # SET_IP solo necesita IP
+            # SET_IP
             self.emitter.emit("SET_IP", ip, None, None)
 
-            # SET_MASK solo necesita máscara
+            # SET_MASK
             self.emitter.emit("SET_MASK", mask, None, None)
 
-            # ALLOC_SUBNET sí usa los 3 argumentos
+            # ALLOC_SUBNET
             for idx, h in enumerate(hosts):
                 result = f"{name}_sub{idx+1}"
                 self.emitter.emit("ALLOC_SUBNET", h, name, result)
 
-            # END_BLOCK solo necesita el nombre
+            # END_BLOCK
             self.emitter.emit("END_BLOCK", name, None, None)
 
-        return self.emitter.dump()
+        ir = self.emitter.instructions
+        optimized_ir = self.optimizer.optimize(ir)
+
+        return "\n".join(str(i) for i in optimized_ir)

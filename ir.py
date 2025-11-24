@@ -9,7 +9,6 @@ class IRInstruction:
     def __repr__(self):
         return f"({self.op}, {self.arg1}, {self.arg2}, {self.result})"
 
-
 class IREmitter:
     def __init__(self):
         self.instructions = []
