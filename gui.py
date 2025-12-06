@@ -1,14 +1,17 @@
-# gui.py
+# gui.py (completo) - GUI integrado con generación y ejecución de .vlsmobj
 import tkinter as tk
-from tkinter import ttk, font, scrolledtext, messagebox
+from tkinter import ttk, font, scrolledtext, messagebox, filedialog
 
 from lexer import VLSMLexer
 from parser import VLSMParser
 from semantic import VLSMSemanticAnalyzer
 from vlsm_calc import calculate_vlsm
-from excel_export import export_to_excel
+from excel_export import export_to_csv
 from utils import TextLineNumbers
+
 from intermediate_code import IntermediateCodeGenerator
+from object_code_generator import ObjectCodeGenerator
+from vm import VLSMVirtualMachine
 
 class VLSMApp:
     def __init__(self, root):
@@ -40,23 +43,32 @@ class VLSMApp:
         self.frame_input = ttk.Frame(self.notebook)
         self.frame_tables = ttk.Frame(self.notebook)
         self.frame_tree = ttk.Frame(self.notebook)
+        self.frame_intermediate = ttk.Frame(self.notebook)
+        self.frame_object = ttk.Frame(self.notebook)
+
         self.notebook.add(self.frame_input, text="Entrada / Salida")
         self.notebook.add(self.frame_tables, text="Tablas")
         self.notebook.add(self.frame_tree, text="Árbol")
-        self.frame_intermediate = ttk.Frame(self.notebook) ##ABCDEF
-        self.notebook.add(self.frame_intermediate, text="Código Intermedio") ##ABCDEF 
-        self._build_intermediate_area(self.frame_intermediate) ##ABCDEF
+        self.notebook.add(self.frame_intermediate, text="Código Intermedio")
+        self.notebook.add(self.frame_object, text="Código Objeto")
+
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Build UI pieces
+        # Build UI
+        self._build_intermediate_area(self.frame_intermediate)
+        self._build_object_area(self.frame_object)
         self._build_io(self.frame_input)
         self._build_tables(self.frame_tables)
         self._build_tree_area(self.frame_tree)
 
-        # Data holders
+        # Data
         self.vlsm_data = None
         self.tokens = []
         self.derivation_tree = []
+        self.generated_object_code = None
+
+        # VM instance (created on demand)
+        self.vm = None
 
     # ------------------
     # UI Builders
@@ -81,7 +93,7 @@ class VLSMApp:
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(pady=8)
         ttk.Button(btn_frame, text="Analizar", command=self.analyze, width=16).pack(side=tk.LEFT, padx=8)
-        ttk.Button(btn_frame, text="Exportar a Excel", command=self.export_to_excel, width=18).pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="Exportar a CSV", command=self.export_to_excel, width=18).pack(side=tk.LEFT, padx=8)
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=5)
 
@@ -141,6 +153,102 @@ class VLSMApp:
         self.text_intermediate.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.text_intermediate.config(state=tk.DISABLED)
 
+
+    def _build_object_area(self, parent):
+        frame = ttk.LabelFrame(parent, text="Código Objeto Resultante (.vlsmobj)")
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Listing (arriba)
+        self.text_object = scrolledtext.ScrolledText(
+            frame, wrap=tk.WORD, width=80, height=15,
+            font=("Consolas", 10), background="#fafdff", foreground="#222"
+        )
+        self.text_object.pack(fill=tk.BOTH, expand=False, padx=10, pady=(10, 4))
+        self.text_object.config(state=tk.DISABLED)
+
+        # Resultado de ejecución de la VM (debajo)
+        ttk.Label(frame, text="Salida de ejecución (.vlsmobj):", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=12, pady=(8,0))
+        self.text_object_output = scrolledtext.ScrolledText(
+            frame, wrap=tk.WORD, width=80, height=8,
+            font=("Consolas", 10), background="#fcfff5", foreground="#111"
+        )
+        self.text_object_output.pack(fill=tk.BOTH, expand=True, padx=10, pady=(4,10))
+        self.text_object_output.config(state=tk.DISABLED)
+
+        # Botones guardar, ejecutar y ejecutar archivo
+        btns = ttk.Frame(frame)
+        btns.pack(pady=(0,8))
+        ttk.Button(btns, text="Guardar Código Objeto", command=self.save_object).pack(side=tk.LEFT, padx=6)
+        ttk.Button(btns, text="Ejecutar Archivo .vlsmobj", command=self.run_object_file).pack(side=tk.LEFT, padx=6)
+
+    def save_object(self):
+        if not self.generated_object_code:
+            messagebox.showerror("Error", "No se ha generado código objeto.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".vlsmobj",
+            filetypes=[("VLSM Object File", "*.vlsmobj")],
+            title="Guardar código objeto"
+        )
+        if file_path:
+            with open(file_path, "wb") as f:
+                f.write(self.generated_object_code)
+            messagebox.showinfo("Guardado", "Código objeto guardado exitosamente.")
+
+    # ------------------
+    # Ejecutar código objeto (VM) - usa el .vlsmobj generado en memoria
+    # ------------------
+    def execute_object_code(self):
+        if not self.generated_object_code:
+            messagebox.showwarning("Atención", "No hay código objeto generado para ejecutar.")
+            return
+
+        try:
+            if self.vm is None:
+                self.vm = VLSMVirtualMachine()
+            else:
+                # reset VM internal state
+                self.vm = VLSMVirtualMachine()
+
+            # cargar desde bytes (con método helper)
+            # la VM que entrego soporta load_from_bytes
+            self.vm.load_from_bytes(self.generated_object_code)
+            output = self.vm.run_and_collect()
+
+            self.text_object_output.config(state=tk.NORMAL)
+            self.text_object_output.delete("1.0", tk.END)
+            self.text_object_output.insert(tk.END, output)
+            self.text_object_output.config(state=tk.DISABLED)
+
+        except Exception as e:
+            messagebox.showerror("Error VM", f"Error ejecutando .vlsmobj:\n{e}")
+
+    # ------------------
+    # Ejecutar un archivo .vlsmobj seleccionado por el usuario
+    # ------------------
+    def run_object_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Seleccionar archivo .vlsmobj",
+            filetypes=[("VLSM Object File", "*.vlsmobj"), ("Todos los archivos", "*.*")]
+        )
+
+        if not file_path:
+            return
+
+        try:
+            vm = VLSMVirtualMachine()
+            vm.load(file_path)
+            output = vm.run_and_collect()
+
+            # Mostrar en el cuadro de salida (misma pestaña)
+            self.text_object_output.config(state=tk.NORMAL)
+            self.text_object_output.delete("1.0", tk.END)
+            self.text_object_output.insert(tk.END, output)
+            self.text_object_output.config(state=tk.DISABLED)
+
+        except Exception as e:
+            messagebox.showerror("Error al ejecutar .vlsmobj", str(e))
 
     # ------------------
     # Error popup (bottom sliding bar, full width)
@@ -337,6 +445,41 @@ class VLSMApp:
 
             self.text_intermediate.config(state=tk.DISABLED)
 
+            # ============================================
+            #          GENERACIÓN DEL CÓDIGO OBJETO
+            # ============================================
+            try:
+                objgen = ObjectCodeGenerator()
+
+                # Obtener instrucciones optimizadas del código intermedio
+                optimized_instructions = generator.optimizer.optimize(generator.emitter.instructions)
+
+                for instr in optimized_instructions:
+                    objgen.add_instruction(instr)
+
+                # Generar binario .vlsmobj
+                self.generated_object_code = objgen.generate_object_code()
+
+                # Generar listado legible para la GUI
+                listing = objgen.generate_listing()
+
+                # Mostrar en pestaña Código Objeto (arriba)
+                self.text_object.config(state=tk.NORMAL)
+                self.text_object.delete("1.0", tk.END)
+                self.text_object.insert(tk.END, listing)
+                self.text_object.config(state=tk.DISABLED)
+
+                # Limpiar salida previa de VM
+                self.text_object_output.config(state=tk.NORMAL)
+                self.text_object_output.delete("1.0", tk.END)
+                self.text_object_output.config(state=tk.DISABLED)
+
+            except Exception as e_obj:
+                self.text_object.config(state=tk.NORMAL)
+                self.text_object.delete("1.0", tk.END)
+                self.text_object.insert(tk.END, f"Error generando código objeto:\n{e_obj}")
+                self.text_object.config(state=tk.DISABLED)
+
         except Exception as e:
             self.text_intermediate.config(state=tk.NORMAL)
             self.text_intermediate.delete("1.0", tk.END)
@@ -364,7 +507,7 @@ class VLSMApp:
 
     def export_to_excel(self):
         if self.vlsm_data:
-            export_to_excel(self.vlsm_data)
+            export_to_csv(self.vlsm_data)
         else:
             messagebox.showerror("Error", "No hay datos válidos para exportar. Realiza un análisis exitoso primero.")
 

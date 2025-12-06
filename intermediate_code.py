@@ -1,40 +1,65 @@
-from ir import IREmitter
+# intermediate_code.py
+from dataclasses import dataclass
+
+# usa el optimizador que ya tienes (optimizer.py)
 from optimizer import IROptimizer
 
+@dataclass
+class IRInstruction:
+    op: str
+    arg1: object = None
+    arg2: object = None
+    result: object = None
+
+    def __repr__(self):
+        parts = [self.op]
+        for p in (self.arg1, self.arg2, self.result):
+            if p is not None:
+                parts.append(repr(p))
+        return " ".join(parts)
+
+class IREmitter:
+    def __init__(self):
+        self.instructions = []
+
+    def emit(self, op, arg1=None, arg2=None, result=None):
+        instr = IRInstruction(op, arg1, arg2, result)
+        self.instructions.append(instr)
+        return instr
+
 class IntermediateCodeGenerator:
+    """
+    Generador de código intermedio básico que produce las instrucciones
+    esperadas por object_code_generator.py
+    """
     def __init__(self, blocks):
-        self.blocks = blocks
+        self.blocks = blocks or []
         self.emitter = IREmitter()
         self.optimizer = IROptimizer()
 
     def generate(self):
-        """
-        Genera el código intermedio.
-        """
-        for block in self.blocks:
-            name = block.get('name', 'BloqueAnonimo')
-            ip = block.get('ip_address')
-            mask = block.get('subnet_mask')
-            hosts = block.get('num_hosts', [])
+        # Produce una lista de instrucciones y devuelve la lista
+        for i, block in enumerate(self.blocks, start=1):
+            name = block.get('name', f'block{i}')
+            ip = block['ip_address']
+            mask = block['subnet_mask']
+            hosts = block['num_hosts']
 
-            # BEGIN_BLOCK
-            self.emitter.emit("BEGIN_BLOCK", name, None, None)
+            # BEGIN
+            self.emitter.emit("BEGIN_BLOCK", None, None, name)
 
-            # SET_IP
-            self.emitter.emit("SET_IP", ip, None, None)
+            # LOAD_NET o LOAD info
+            self.emitter.emit("LOAD_NET", f"{ip}{mask}", None, name)
 
-            # SET_MASK
-            self.emitter.emit("SET_MASK", mask, None, None)
-
-            # ALLOC_SUBNET
+            # ALLOC_SUBNET por cada hosts solicitado
             for idx, h in enumerate(hosts):
-                result = f"{name}_sub{idx+1}"
-                self.emitter.emit("ALLOC_SUBNET", h, name, result)
+                self.emitter.emit("ALLOC_SUBNET", name, h, f"{name}_sub{idx+1}")
 
-            # END_BLOCK
-            self.emitter.emit("END_BLOCK", name, None, None)
+            # CALC VLSM y EXPORT y END
+            self.emitter.emit("CALC_VLSM", name, None, None)
+            self.emitter.emit("EXPORT_EXCEL", name, None, None)
 
-        ir = self.emitter.instructions
-        optimized_ir = self.optimizer.optimize(ir)
+            self.emitter.emit("END_BLOCK", None, None, name)
 
-        return "\n".join(str(i) for i in optimized_ir)
+        # return the emitter.instructions for display
+        return self.emitter.instructions
