@@ -1,6 +1,6 @@
 # gui.py
 import tkinter as tk
-from tkinter import ttk, font, scrolledtext, messagebox
+from tkinter import ttk, font, scrolledtext, messagebox, filedialog
 
 from lexer import VLSMLexer
 from parser import VLSMParser
@@ -9,6 +9,7 @@ from vlsm_calc import calculate_vlsm
 from excel_export import export_to_excel
 from utils import TextLineNumbers
 from intermediate_code import IntermediateCodeGenerator
+from code_generator import generate_object_code
 
 class VLSMApp:
     def __init__(self, root):
@@ -43,9 +44,12 @@ class VLSMApp:
         self.notebook.add(self.frame_input, text="Entrada / Salida")
         self.notebook.add(self.frame_tables, text="Tablas")
         self.notebook.add(self.frame_tree, text="Árbol")
-        self.frame_intermediate = ttk.Frame(self.notebook) ##ABCDEF
-        self.notebook.add(self.frame_intermediate, text="Código Intermedio") ##ABCDEF 
-        self._build_intermediate_area(self.frame_intermediate) ##ABCDEF
+        self.frame_intermediate = ttk.Frame(self.notebook) 
+        self.notebook.add(self.frame_intermediate, text="Código Intermedio")  
+        self._build_intermediate_area(self.frame_intermediate)
+        self.frame_object_code = ttk.Frame(self.notebook)
+        self.notebook.add(self.frame_object_code, text="Código Objeto")
+        self._build_object_code_area(self.frame_object_code)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         # Build UI pieces
@@ -141,6 +145,36 @@ class VLSMApp:
         self.text_intermediate.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.text_intermediate.config(state=tk.DISABLED)
 
+    def _build_object_code_area(self, parent):
+        """Construye el área para mostrar el código objeto generado."""
+        frame = ttk.LabelFrame(parent, text="Código Objeto (Configuración Router)")
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        # Botones
+        btn_frame = ttk.Frame(frame)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Button(
+            btn_frame, 
+            text="💾 Guardar Configuración", 
+            command=self.save_object_code,
+            width=25
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            btn_frame, 
+            text="📂 Abrir Configuración", 
+            command=self.open_object_code,
+            width=25
+        ).pack(side=tk.LEFT, padx=5)
+
+        # Área de texto
+        self.text_object_code = scrolledtext.ScrolledText(
+            frame, wrap=tk.WORD, width=80, height=25,
+            font=("Consolas", 11), background="#f5f5f5", foreground="#222"
+        )
+        self.text_object_code.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.text_object_code.config(state=tk.DISABLED)
 
     # ------------------
     # Error popup (bottom sliding bar, full width)
@@ -343,6 +377,22 @@ class VLSMApp:
             self.text_intermediate.insert(tk.END, f"Error generando código intermedio:\n{e}")
             self.text_intermediate.config(state=tk.DISABLED)
 
+        # === CÓDIGO OBJETO ===
+        try:
+            optimized_instructions = generator.optimizer.optimize(generator.emitter.instructions)
+            object_code = generate_object_code(optimized_instructions)
+            
+            self.text_object_code.config(state=tk.NORMAL)
+            self.text_object_code.delete("1.0", tk.END)
+            self.text_object_code.insert(tk.END, object_code)
+            self.text_object_code.config(state=tk.DISABLED)
+
+        except Exception as e:
+            self.text_object_code.config(state=tk.NORMAL)
+            self.text_object_code.delete("1.0", tk.END)
+            self.text_object_code.insert(tk.END, f"Error generando código objeto:\n{e}")
+            self.text_object_code.config(state=tk.DISABLED)
+
     # ------------------
     # Tables & helpers
     # ------------------
@@ -361,6 +411,10 @@ class VLSMApp:
             self.text_intermediate.delete("1.0", tk.END)
             self.text_intermediate.config(state=tk.DISABLED)
 
+        if hasattr(self, "text_object_code"):
+            self.text_object_code.config(state=tk.NORMAL)
+            self.text_object_code.delete("1.0", tk.END)
+            self.text_object_code.config(state=tk.DISABLED)        
 
     def export_to_excel(self):
         if self.vlsm_data:
@@ -368,6 +422,60 @@ class VLSMApp:
         else:
             messagebox.showerror("Error", "No hay datos válidos para exportar. Realiza un análisis exitoso primero.")
 
+    def save_object_code(self):
+        """Guarda el código objeto en un archivo .cfg"""
+        from tkinter import filedialog
+        
+        content = self.text_object_code.get("1.0", tk.END).strip()
+        if not content or "Error generando" in content:
+            messagebox.showwarning("Advertencia", "No hay código objeto válido para guardar.")
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".cfg",
+            filetypes=[
+                ("Archivos de configuración", "*.cfg"),
+                ("Archivos de texto", "*.txt"),
+                ("Todos los archivos", "*.*")
+            ],
+            initialfile="router_config.cfg"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                messagebox.showinfo("Éxito", f"Configuración guardada en:\n{filename}")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo guardar el archivo:\n{e}")
+
+    def open_object_code(self):
+        """Abre y muestra un archivo .cfg existente"""
+        from tkinter import filedialog
+        
+        filename = filedialog.askopenfilename(
+            title="Abrir configuración de router",
+            filetypes=[
+                ("Archivos de configuración", "*.cfg"),
+                ("Archivos de texto", "*.txt"),
+                ("Todos los archivos", "*.*")
+            ]
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                self.text_object_code.config(state=tk.NORMAL)
+                self.text_object_code.delete("1.0", tk.END)
+                self.text_object_code.insert("1.0", content)
+                self.text_object_code.config(state=tk.DISABLED)
+                
+                messagebox.showinfo("Éxito", f"Configuración cargada desde:\n{filename}")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo abrir el archivo:\n{e}")
+            
     def populate_tables(self):
         # tokens table
         for i in self.tv_tokens.get_children():
