@@ -432,13 +432,13 @@ class VLSMApp:
             return
         
         filename = filedialog.asksaveasfilename(
-            defaultextension=".cfg",
+            defaultextension=".asm",
             filetypes=[
-                ("Archivos de configuración", "*.cfg"),
+                ("Archivos de configuración", "*.asm"),
                 ("Archivos de texto", "*.txt"),
                 ("Todos los archivos", "*.*")
             ],
-            initialfile="router_config.cfg"
+            initialfile="output.asm"
         )
         
         if filename:
