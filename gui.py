@@ -1,33 +1,22 @@
-# gui.py - Versión final (sin .vlsmobj). Añade pestaña Cisco IOS.
+# gui.py
 import tkinter as tk
 from tkinter import ttk, font, scrolledtext, messagebox, filedialog
 
-# Componentes del compilador
 from lexer import VLSMLexer
 from parser import VLSMParser
 from semantic import VLSMSemanticAnalyzer
 from vlsm_calc import calculate_vlsm
-from excel_export import export_to_csv
+from excel_export import export_to_excel
 from utils import TextLineNumbers
-
 from intermediate_code import IntermediateCodeGenerator
-
-# Generador Cisco
-from cisco_generator import generate_cisco_config
-
-# VM para leer archivos .ioscfg si deseas ejecutar fuera del router (opcional)
-# vm.run_ioscfg simplemente imprime el archivo; incluyendo aquí por si quieres añadir ejecuciones.
-try:
-    from vm import run_ioscfg
-except Exception:
-    run_ioscfg = None  # si no existe, no rompemos el GUI
+from code_generator_asm import generate_asm_code
 
 class VLSMApp:
     def __init__(self, root):
         self.root = root
-        root.title("Compilador VLSM - Cisco IOS Exporter")
+        root.title("Compilador VLSM")
 
-        # UI styling
+        # Styles
         style = ttk.Style()
         try:
             style.theme_use('clam')
@@ -42,41 +31,40 @@ class VLSMApp:
         style.configure("TLabelframe", background="#f5f6fa", font=("Segoe UI", 10, "bold"))
         style.configure("TLabelframe.Label", font=("Segoe UI", 11, "bold"))
 
-        # Fonts
+        # Variables
+        self.error_popup = None
+        self.error_popup_height = 180
         self.monospace = font.Font(family="Consolas", size=11)
 
-        # Notebook / tabs
+        # Main notebook
         self.notebook = ttk.Notebook(root)
         self.frame_input = ttk.Frame(self.notebook)
         self.frame_tables = ttk.Frame(self.notebook)
         self.frame_tree = ttk.Frame(self.notebook)
-        self.frame_intermediate = ttk.Frame(self.notebook)
-        self.frame_cisco = ttk.Frame(self.notebook)
-
         self.notebook.add(self.frame_input, text="Entrada / Salida")
         self.notebook.add(self.frame_tables, text="Tablas")
         self.notebook.add(self.frame_tree, text="Árbol")
-        self.notebook.add(self.frame_intermediate, text="Código Intermedio")
-        self.notebook.add(self.frame_cisco, text="Cisco IOS")
-
+        self.frame_intermediate = ttk.Frame(self.notebook) 
+        self.notebook.add(self.frame_intermediate, text="Código Intermedio")  
+        self._build_intermediate_area(self.frame_intermediate)
+        self.frame_asm_code = ttk.Frame(self.notebook)
+        self.notebook.add(self.frame_asm_code, text="Código Ensamblador")
+        self._build_asm_code_area(self.frame_asm_code)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Build each area
+        # Build UI pieces
         self._build_io(self.frame_input)
         self._build_tables(self.frame_tables)
         self._build_tree_area(self.frame_tree)
-        self._build_intermediate_area(self.frame_intermediate)
-        self._build_cisco_area(self.frame_cisco)
 
-        # Data containers
+        # Data holders
         self.vlsm_data = None
         self.tokens = []
         self.derivation_tree = []
-        self.generated_cisco = None
 
-    # -----------------------------
-    # UI builders
-    # -----------------------------
+    # ------------------
+    # UI Builders
+    # ------------------
     def _build_io(self, parent):
         input_frame = ttk.LabelFrame(parent, text="Entrada")
         input_frame.pack(fill=tk.BOTH, padx=10, pady=5, expand=True)
@@ -84,11 +72,11 @@ class VLSMApp:
         tf = ttk.Frame(input_frame)
         tf.pack(fill=tk.BOTH, expand=1, padx=5, pady=5)
 
-        self.linenumbers = TextLineNumbers(tf, width=36, bg="#e9eef2")
+        self.linenumbers = TextLineNumbers(tf, width=30, bg="#e1e8ed")
         self.linenumbers.pack(side="left", fill="y", padx=(0, 2))
 
         self.input_text = scrolledtext.ScrolledText(
-            tf, wrap=tk.WORD, width=72, height=10, font=self.monospace, background="#fafdff"
+            tf, wrap=tk.WORD, width=60, height=8, font=self.monospace, background="#fafdff"
         )
         self.input_text.pack(side="left", fill=tk.BOTH, expand=1)
         self.input_text.bind("<KeyRelease>", lambda e: [self.linenumbers.redraw(), self.highlight_reserved_words()])
@@ -97,7 +85,7 @@ class VLSMApp:
         btn_frame = ttk.Frame(parent)
         btn_frame.pack(pady=8)
         ttk.Button(btn_frame, text="Analizar", command=self.analyze, width=16).pack(side=tk.LEFT, padx=8)
-        ttk.Button(btn_frame, text="Exportar a CSV", command=self.export_to_excel, width=18).pack(side=tk.LEFT, padx=8)
+        ttk.Button(btn_frame, text="Exportar a Excel", command=self.export_to_excel, width=18).pack(side=tk.LEFT, padx=8)
 
         ttk.Separator(parent, orient="horizontal").pack(fill=tk.X, padx=10, pady=5)
 
@@ -109,8 +97,8 @@ class VLSMApp:
         self.output_text = scrolledtext.ScrolledText(
             output_label_frame,
             wrap=tk.WORD,
-            width=72,
-            height=16,
+            width=60,
+            height=18,
             state=tk.NORMAL,
             font=("Consolas", 12),
             background="#fafdff",
@@ -131,14 +119,14 @@ class VLSMApp:
         self.tv_tokens = ttk.Treeview(self.tab_tokens, columns=cols_tok, show='headings', height=12)
         for c in cols_tok:
             self.tv_tokens.heading(c, text=c)
-            self.tv_tokens.column(c, anchor="center", width=140)
+            self.tv_tokens.column(c, anchor="center", width=130)
         self.tv_tokens.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         cols_res = ("Palabra", "Cantidad")
         self.tv_reserved = ttk.Treeview(self.tab_reserved, columns=cols_res, show='headings', height=12)
         for c in cols_res:
             self.tv_reserved.heading(c, text=c)
-            self.tv_reserved.column(c, anchor="center", width=160)
+            self.tv_reserved.column(c, anchor="center", width=150)
         self.tv_reserved.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
     def _build_tree_area(self, parent):
@@ -151,113 +139,145 @@ class VLSMApp:
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
         self.text_intermediate = scrolledtext.ScrolledText(
-            frame, wrap=tk.WORD, width=88, height=30,
-            font=("Consolas", 11), background="#f7fbff", foreground="#222"
+            frame, wrap=tk.WORD, width=80, height=25,
+            font=("Consolas", 11), background="#fafdff", foreground="#222"
         )
         self.text_intermediate.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         self.text_intermediate.config(state=tk.DISABLED)
 
-    def _build_cisco_area(self, parent):
-        frame = ttk.LabelFrame(parent, text="Configuración Cisco IOS Generada")
+    def _build_asm_code_area(self, parent):
+        """Construye el área para mostrar el código ensamblador."""
+        frame = ttk.LabelFrame(parent, text="Código Ensamblador 8086 para EMU8086")
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Config listing
-        self.text_cisco = scrolledtext.ScrolledText(
-            frame, wrap=tk.WORD, width=88, height=28,
-            font=("Consolas", 11), background="#fcfff5", foreground="#111"
-        )
-        self.text_cisco.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10,6))
-        self.text_cisco.config(state=tk.DISABLED)
-
-        # Buttons
+        # Botones
         btn_frame = ttk.Frame(frame)
-        btn_frame.pack(pady=(0,10))
-        ttk.Button(btn_frame, text="Guardar archivo Cisco (.ioscfg)", command=self.save_cisco).pack(side=tk.LEFT, padx=6)
-        if run_ioscfg:
-            ttk.Button(btn_frame, text="Ver archivo (ejecutar local)", command=self.run_selected_ios_file).pack(side=tk.LEFT, padx=6)
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Button(
+            btn_frame, 
+            text="💾 Guardar ASM", 
+            command=self.save_asm_code,
+            width=22
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            btn_frame, 
+            text="📂 Abrir ASM", 
+            command=self.open_asm_code,
+            width=22
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(
+            btn_frame, 
+            text="📋 Copiar al Portapapeles", 
+            command=self.copy_asm_code,
+            width=25
+        ).pack(side=tk.LEFT, padx=5)
 
-    # -----------------------------
-    # Saving / running Cisco config
-    # -----------------------------
-    def save_cisco(self):
-        if not self.generated_cisco:
-            messagebox.showerror("Error", "No hay configuración Cisco generada. Realiza un análisis primero.")
-            return
-
-        path = filedialog.asksaveasfilename(
-            title="Guardar archivo Cisco",
-            defaultextension=".ioscfg",
-            filetypes=[("Cisco Config", "*.ioscfg"), ("Text", "*.txt"), ("All", "*.*")]
+        # Área de texto
+        self.text_asm_code = scrolledtext.ScrolledText(
+            frame, wrap=tk.WORD, width=80, height=25,
+            font=("Consolas", 10), background="#f5f5f5", foreground="#222"
         )
-        if not path:
-            return
+        self.text_asm_code.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.text_asm_code.config(state=tk.DISABLED)
 
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(self.generated_cisco)
-            messagebox.showinfo("Guardado", f"Archivo Cisco guardado en:\n{path}")
-        except Exception as e:
-            messagebox.showerror("Error guardando archivo Cisco", str(e))
+    # ------------------
+    # Error popup (bottom sliding bar, full width)
+    # ------------------
+    def show_error_popup(self, error_text):
+        # Destroy previous if exists
+        if self.error_popup and self.error_popup.winfo_exists():
+            self.error_popup.destroy()
 
-    def run_selected_ios_file(self):
-        """
-        Abre un diálogo para seleccionar un archivo .ioscfg y lo 'ejecuta' con run_ioscfg (si está disponible).
-        El run_ioscfg por defecto solo imprime el contenido; en el futuro puede integrarse con SSH.
-        """
-        file_path = filedialog.askopenfilename(title="Seleccionar archivo .ioscfg",
-                                               filetypes=[("Cisco Config", "*.ioscfg"), ("Text", "*.txt"), ("All", "*.*")])
-        if not file_path:
-            return
+        # Create bottom frame that spans full width
+        self.error_popup = tk.Frame(
+            self.root, bg="#fff8f0", bd=2, relief="groove", highlightbackground="#d6d6d6", highlightthickness=1
+        )
+        # Place it anchored to bottom, full width
+        self.error_popup.place(relx=0, rely=1.0, anchor="sw", relwidth=1.0, height=self.error_popup_height, y=-5)
 
-        try:
-            if run_ioscfg is None:
-                messagebox.showerror("No disponible", "La función run_ioscfg no está disponible en vm.py")
-                return
-            # run_ioscfg imprime a stdout; capturamos y mostramos en una ventana modal
-            output = run_ioscfg(file_path)
-            # Si run_ioscfg devuelve texto, mostrarlo; si imprime, puede no devolver nada.
-            if output is None:
-                # Abrir el archivo y mostrar su contenido
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
-                output = content
+        # Grip for resizing
+        grip = tk.Frame(self.error_popup, height=10, bg="#f0f0f0", cursor="sb_v_double_arrow")
+        grip.pack(fill=tk.X, side="top")
+        grip.bind("<ButtonPress-1>", self._start_resize_error_popup_top)
+        grip.bind("<B1-Motion>", self._do_resize_error_popup_top)
 
-            # Mostrar en ventana
-            win = tk.Toplevel(self.root)
-            win.title(f"Salida run_ioscfg - {file_path}")
-            txt = scrolledtext.ScrolledText(win, wrap=tk.WORD, font=("Consolas", 11))
-            txt.pack(fill=tk.BOTH, expand=True)
-            txt.insert(tk.END, output)
-            txt.config(state=tk.DISABLED)
-        except Exception as e:
-            messagebox.showerror("Error ejecutando archivo", str(e))
+        header = tk.Frame(self.error_popup, bg="#fff8f0")
+        header.pack(fill=tk.X, side="top")
 
-    # -----------------------------
+        title = tk.Label(
+            header, text="Errores", bg="#fff8f0", fg="#222",
+            font=("Segoe UI", 12, "bold"), anchor="w", padx=12, pady=2
+        )
+        title.pack(side="left", fill=tk.X, expand=True)
+
+        close_btn = tk.Button(
+            header, text="✖", command=self.hide_error_popup, bd=0, bg="#fff8f0", fg="#b71c1c",
+            font=("Segoe UI", 13, "bold"), activebackground="#f0f0f0", activeforeground="#b71c1c", cursor="hand2"
+        )
+        close_btn.pack(side="right", padx=8, pady=2)
+
+        # Error textbox
+        error_textbox = scrolledtext.ScrolledText(
+            self.error_popup, wrap=tk.WORD, height=6, font=("Consolas", 11),
+            bg="#fff8f0", fg="#b71c1c", bd=0, relief="flat", highlightthickness=0
+        )
+        error_textbox.insert("1.0", error_text)
+        error_textbox.config(state=tk.DISABLED)
+        error_textbox.pack(fill=tk.BOTH, expand=True, padx=14, pady=(0, 8))
+
+    def hide_error_popup(self):
+        if self.error_popup and self.error_popup.winfo_exists():
+            self.error_popup.destroy()
+            self.error_popup = None
+
+    def _start_resize_error_popup_top(self, event):
+        self._resize_start_y = event.y_root
+        self._resize_start_height = self.error_popup.winfo_height()
+
+    def _do_resize_error_popup_top(self, event):
+        delta = self._resize_start_y - event.y_root
+        new_height = self._resize_start_height + delta
+        min_height = 60
+        max_height = self.root.winfo_height() - 40
+        if new_height < min_height:
+            new_height = min_height
+        elif new_height > max_height:
+            new_height = max_height
+        self.error_popup.place_configure(height=new_height, y=-5)
+        self.error_popup_height = new_height
+
+    # ------------------
     # Analysis pipeline
-    # -----------------------------
+    # ------------------
     def analyze(self):
-        # Reset UI
-        self._cleanup_analysis()
+        # Reset UI bits
+        self.hide_error_popup()
         self.output_text.config(state=tk.NORMAL)
         self.output_text.delete("1.0", tk.END)
         self.vlsm_data = None
         self.tokens = []
+        for tab in getattr(self, 'tree_tabs', []):
+            self.tree_notebook.forget(tab)
+        self.tree_tabs = []
 
         code = self.input_text.get("1.0", tk.END).strip()
         if not code:
-            messagebox.showwarning("Advertencia", "Por favor introduce un código para analizar.")
+            messagebox.showwarning("Advertencia", "Por favor, introduce un código para analizar.")
             return
 
-        # Lexical
+        # LEXICAL
         lexer = VLSMLexer()
         tokens, lex_errors = lexer.tokenize(code)
         self.tokens = tokens
 
-        # Show tokens
+        # Show lexical header & tokens
         self.output_text.insert(tk.END, "=== ANÁLISIS LÉXICO ===\n")
         for token in tokens:
             token_type, value, line, col = token
-            self.output_text.insert(tk.END, f"Token: {token_type} Valor: {value} (L{line},C{col})\n")
+            self.output_text.insert(tk.END, f"Token: {token_type} Valor: {value} (Línea {line}, Posición {col})\n")
         self.populate_tables()
 
         error_text = ""
@@ -267,12 +287,12 @@ class VLSMApp:
                 error_text += f"{err}\n"
             error_text += "\n"
 
-        # Syntax
+        # SYNTAX
         parser = VLSMParser(tokens)
         blocks = parser.parse()
         syntax_errors = parser.errors
 
-        # Build tree view
+        # Build tree (parse_with_tree)
         parser2 = VLSMParser(tokens)
         tree_blocks = parser2.parse_with_tree()
         self.derivation_tree = tree_blocks
@@ -284,7 +304,7 @@ class VLSMApp:
                 error_text += f"{err}\n"
             error_text += "\n"
 
-        # Semantic
+        # SEMANTIC
         semantic_errors = []
         if not lex_errors and not syntax_errors:
             self.output_text.insert(tk.END, "\n=== ANÁLISIS SINTÁCTICO ===\n")
@@ -308,40 +328,40 @@ class VLSMApp:
                     error_text += f"{err}\n"
                 error_text += "\n"
 
-        # If errors show them
+        # Decide what to show
         if error_text:
+            # Show errors in the bottom sliding panel (full width)
             self.show_error_popup(error_text)
             self.vlsm_data = None
-            self.output_text.config(state=tk.DISABLED)
-            return
+        else:
+            # No errors: compute VLSM and show nicely formatted output
+            if blocks and not lex_errors and not syntax_errors and not semantic_errors:
+                self.output_text.insert(tk.END, "\n=== CÁLCULO VLSM ===\n")
+                all_results = []
+                for block in blocks:
+                    results = calculate_vlsm(block['ip_address'], block['subnet_mask'],
+                                            block['num_hosts'], block.get('name'))
+                    all_results.extend(results)
 
-        # No errors -> calculate VLSM and display results
-        if blocks and not lex_errors and not syntax_errors and not semantic_errors:
-            self.output_text.insert(tk.END, "\n=== CÁLCULO VLSM ===\n")
-            all_results = []
-            for block in blocks:
-                results = calculate_vlsm(block['ip_address'], block['subnet_mask'], block['num_hosts'], block.get('name'))
-                all_results.extend(results)
+                self.vlsm_data = all_results
 
-            self.vlsm_data = all_results
-
-            for res in all_results:
-                salida = (
-                    f"Hosts solicitados: {res['hosts_solicitados']}\n"
-                    f"Hosts encontrados: {res['hosts_encontrados']}\n"
-                    f"Dirección de red: {res['direccionamiento_de_red']}\n"
-                    f"Nueva máscara: {res['nueva_mascara']}\n"
-                    f"Máscara decimal: {res['mascara_decimal']}\n"
-                    f"Primera IP utilizable: {res['primera_ip_utilizable']}\n"
-                    f"Última IP utilizable: {res['ultima_ip_utilizable']}\n"
-                    f"Dirección de broadcast: {res['direccion_de_broadcast']}\n"
-                    "--------------------------------------\n"
-                )
-                self.output_text.insert(tk.END, salida)
+                for res in all_results:
+                    salida = (
+                        f"Hosts solicitados: {res['hosts_solicitados']}\n"
+                        f"Hosts encontrados: {res['hosts_encontrados']}\n"
+                        f"Dirección de red: {res['direccionamiento_de_red']}\n"
+                        f"Nueva máscara: {res['nueva_mascara']}\n"
+                        f"Máscara decimal: {res['mascara_decimal']}\n"
+                        f"Primera IP utilizable: {res['primera_ip_utilizable']}\n"
+                        f"Última IP utilizable: {res['ultima_ip_utilizable']}\n"
+                        f"Dirección de broadcast: {res['direccion_de_broadcast']}\n"
+                        "--------------------------------------\n"
+                    )
+                    self.output_text.insert(tk.END, salida)
 
         self.output_text.config(state=tk.DISABLED)
 
-        # === Código Intermedio ===
+        # === CÓDIGO INTERMEDIO ===
         try:
             generator = IntermediateCodeGenerator(blocks)
             intermediate_result = generator.generate()
@@ -357,27 +377,32 @@ class VLSMApp:
                 self.text_intermediate.insert(tk.END, str(intermediate_result))
 
             self.text_intermediate.config(state=tk.DISABLED)
+
         except Exception as e:
             self.text_intermediate.config(state=tk.NORMAL)
             self.text_intermediate.delete("1.0", tk.END)
             self.text_intermediate.insert(tk.END, f"Error generando código intermedio:\n{e}")
             self.text_intermediate.config(state=tk.DISABLED)
 
-        # === GENERAR CONFIGURACIÓN CISCO ===
+        # === CÓDIGO ENSAMBLADOR ===
         try:
-            if self.vlsm_data:
-                # default interface prefix can be changed
-                self.generated_cisco = generate_cisco_config(self.vlsm_data, interface_prefix="GigabitEthernet0/")
-                self.text_cisco.config(state=tk.NORMAL)
-                self.text_cisco.delete("1.0", tk.END)
-                self.text_cisco.insert(tk.END, self.generated_cisco)
-                self.text_cisco.config(state=tk.DISABLED)
-        except Exception as e:
-            messagebox.showerror("Error generando Cisco config", str(e))
+            optimized_instructions = generator.optimizer.optimize(generator.emitter.instructions)
+            asm_code = generate_asm_code(optimized_instructions)
+            
+            self.text_asm_code.config(state=tk.NORMAL)
+            self.text_asm_code.delete("1.0", tk.END)
+            self.text_asm_code.insert(tk.END, asm_code)
+            self.text_asm_code.config(state=tk.DISABLED)
 
-    # -----------------------------
-    # Tables / helpers
-    # -----------------------------
+        except Exception as e:
+            self.text_asm_code.config(state=tk.NORMAL)
+            self.text_asm_code.delete("1.0", tk.END)
+            self.text_asm_code.insert(tk.END, f"Error generando código ensamblador:\n{e}")
+            self.text_asm_code.config(state=tk.DISABLED)
+
+    # ------------------
+    # Tables & helpers
+    # ------------------
     def _cleanup_analysis(self):
         for i in self.tv_tokens.get_children():
             self.tv_tokens.delete(i)
@@ -387,26 +412,96 @@ class VLSMApp:
             self.tree_notebook.forget(tab)
         self.tree_tabs = []
         self.vlsm_data = None
-        self.generated_cisco = None
 
         if hasattr(self, "text_intermediate"):
             self.text_intermediate.config(state=tk.NORMAL)
             self.text_intermediate.delete("1.0", tk.END)
             self.text_intermediate.config(state=tk.DISABLED)
 
-        if hasattr(self, "text_cisco"):
-            self.text_cisco.config(state=tk.NORMAL)
-            self.text_cisco.delete("1.0", tk.END)
-            self.text_cisco.config(state=tk.DISABLED)
+        if hasattr(self, "text_asm_code"):
+            self.text_asm_code.config(state=tk.NORMAL)
+            self.text_asm_code.delete("1.0", tk.END)
+            self.text_asm_code.config(state=tk.DISABLED)
 
     def export_to_excel(self):
         if self.vlsm_data:
-            export_to_csv(self.vlsm_data)
+            export_to_excel(self.vlsm_data)
         else:
             messagebox.showerror("Error", "No hay datos válidos para exportar. Realiza un análisis exitoso primero.")
 
+    def save_asm_code(self):
+        """Guarda el código ensamblador en un archivo .asm"""
+        content = self.text_asm_code.get("1.0", tk.END).strip()
+        if not content or "Error generando" in content:
+            messagebox.showwarning("Advertencia", "No hay código ensamblador válido para guardar.")
+            return
+        
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".asm",
+            filetypes=[
+                ("Archivos ensamblador", "*.asm"),
+                ("Archivos de texto", "*.txt"),
+                ("Todos los archivos", "*.*")
+            ],
+            initialfile="router_config.asm"
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(content)
+                messagebox.showinfo(
+                    "Éxito", 
+                    f"Código ensamblador guardado en:\n{filename}\n\n"
+                    "Puedes abrirlo en EMU8086 para compilarlo y ejecutarlo.\n\n"
+                    "Pasos:\n"
+                    "1. Abre EMU8086\n"
+                    "2. File → Open (o Ctrl+O)\n"
+                    "3. Selecciona el archivo .asm\n"
+                    "4. Compile (F5)\n"
+                    "5. Emulate (F6) → Run (F9)"
+                )
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo guardar el archivo:\n{e}")
+
+    def open_asm_code(self):
+        """Abre y muestra un archivo .asm existente"""
+        filename = filedialog.askopenfilename(
+            title="Abrir código ensamblador",
+            filetypes=[
+                ("Archivos ensamblador", "*.asm"),
+                ("Archivos de texto", "*.txt"),
+                ("Todos los archivos", "*.*")
+            ]
+        )
+        
+        if filename:
+            try:
+                with open(filename, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                self.text_asm_code.config(state=tk.NORMAL)
+                self.text_asm_code.delete("1.0", tk.END)
+                self.text_asm_code.insert("1.0", content)
+                self.text_asm_code.config(state=tk.DISABLED)
+                
+                messagebox.showinfo("Éxito", f"Código ensamblador cargado desde:\n{filename}")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo abrir el archivo:\n{e}")
+
+    def copy_asm_code(self):
+        """Copia el código ensamblador al portapapeles"""
+        content = self.text_asm_code.get("1.0", tk.END).strip()
+        if not content or "Error generando" in content:
+            messagebox.showwarning("Advertencia", "No hay código ensamblador válido para copiar.")
+            return
+        
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
+        messagebox.showinfo("Éxito", "Código ensamblador copiado al portapapeles.\n\nPuedes pegarlo en EMU8086.")
+            
     def populate_tables(self):
-        # tokens
+        # tokens table
         for i in self.tv_tokens.get_children():
             self.tv_tokens.delete(i)
         for i in self.tv_reserved.get_children():
@@ -424,9 +519,9 @@ class VLSMApp:
         for word, count in counts.items():
             self.tv_reserved.insert('', tk.END, values=(word, count))
 
-    # -----------------------------
-    # Highlighting & lines
-    # -----------------------------
+    # ------------------
+    # Highlighting & line numbers
+    # ------------------
     def highlight_reserved_words(self):
         reserved_words = ['IP', 'MASK', 'HOSTS', 'NAME']
         for word in reserved_words:
@@ -442,11 +537,11 @@ class VLSMApp:
                 self.input_text.tag_config(word, foreground="#0074D9", font=("Consolas", 11, "bold"))
                 start_index = end_index
 
-    # -----------------------------
-    # Draw tree
-    # -----------------------------
+    # ------------------
+    # Tree drawing (one tab per parsed tree)
+    # ------------------
     def draw_tree(self, tree):
-        # remove old tabs
+        # Clear old tabs
         for tab in getattr(self, 'tree_tabs', []):
             self.tree_notebook.forget(tab)
         self.tree_tabs = []
@@ -594,13 +689,9 @@ class VLSMApp:
             draw_node(block, root_x, root_y, is_root=True)
             canvas.config(scrollregion=(0, 0, canvas_width, canvas_height))
 
-# Run as script for quick testing
+# Run guard for debugging directly
 if __name__ == "__main__":
     root = tk.Tk()
-    # maximize window
-    try:
-        root.state('zoomed')
-    except Exception:
-        root.geometry("1200x800")
+    root.state('zoomed')
     app = VLSMApp(root)
     root.mainloop()
